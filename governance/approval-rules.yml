@@ -1,0 +1,176 @@
+# Reglas de Aprobación del Ecosistema
+# Source of Truth v1.0.0
+
+version: "1.0.0"
+last_updated: "2026-04-08"
+
+# ============================================================
+# REGLAS GENERALES
+# ============================================================
+general:
+  default_required_approvals: 1
+  dismiss_stale_reviews_on_push: true
+  require_review_from_code_owners: false
+  require_last_push_approval: true
+  allow_auto_merge: false
+
+# ============================================================
+# REGLAS POR TIPO DE CAMBIO
+# ============================================================
+change_types:
+
+  # Cambios en estándares del Source of Truth
+  standard_update:
+    description: "Cambios en archivos de estándares en agents/, governance/, standards/"
+    paths:
+      - "agents/**"
+      - "governance/**"
+      - "standards/**"
+    required_approvals: 2
+    required_reviewers:
+      - role: "architect"
+    auto_merge_allowed: false
+    require_security_review: false
+
+  # Cambios en pipeline base
+  pipeline_update:
+    description: "Cambios en workflows de GitHub Actions"
+    paths:
+      - ".github/workflows/**"
+    required_approvals: 2
+    required_reviewers:
+      - role: "devops"
+      - role: "architect"
+    auto_merge_allowed: false
+    require_security_review: true
+
+  # Cambios en configuración de seguridad
+  security_config:
+    description: "Cambios en políticas de seguridad"
+    paths:
+      - "governance/security-policy.md"
+      - "governance/approval-rules.yml"
+      - ".github/dependabot.yml"
+    required_approvals: 2
+    required_reviewers:
+      - role: "security"
+      - role: "architect"
+    auto_merge_allowed: false
+    require_security_review: true
+
+  # PRs generados por agentes auditores
+  agent_generated:
+    description: "PRs creados automáticamente por el Agente Auditor"
+    labels:
+      - "agent-generated"
+      - "audit-fix"
+    required_approvals: 1
+    required_reviewers:
+      - role: "repo_owner"
+    auto_merge_allowed: false
+    require_human_review: true
+    min_confidence_score: 0.85
+
+  # Actualizaciones de documentación
+  documentation:
+    description: "Cambios solo en archivos .md"
+    paths:
+      - "docs/**"
+      - "**/*.md"
+    exclude_paths:
+      - "governance/security-policy.md"
+      - "agents/behavior-standard.md"
+    required_approvals: 1
+    auto_merge_allowed: false
+
+  # Actualizaciones de dependencias (Dependabot)
+  dependency_update:
+    description: "PRs automáticos de actualización de dependencias"
+    labels:
+      - "dependencies"
+    required_approvals: 1
+    auto_merge_conditions:
+      - "all_tests_passing"
+      - "no_security_alerts"
+      - "semver_patch_only"
+    auto_merge_allowed: true  # Solo si cumple condiciones
+
+# ============================================================
+# REGLAS DE ENTORNOS
+# ============================================================
+environments:
+
+  staging:
+    required_approvals: 1
+    wait_timer: 0
+    reviewers:
+      - role: "developer"
+    deployment_branch_policy:
+      protected_branches: false
+      custom_branches:
+        - "main"
+        - "staging"
+        - "release/**"
+
+  production:
+    required_approvals: 2
+    wait_timer: 300  # 5 minutos de espera obligatoria
+    reviewers:
+      - role: "architect"
+      - role: "devops"
+    prevent_self_review: true
+    deployment_branch_policy:
+      protected_branches: true
+      custom_branches:
+        - "main"
+
+# ============================================================
+# REGLAS PARA AGENTES DE IA
+# ============================================================
+agent_rules:
+
+  L0:
+    description: "Solo lectura y análisis"
+    can_create_prs: false
+    can_comment: true
+    can_request_changes: false
+    require_human_approval_for: ["all_actions"]
+
+  L1:
+    description: "Sugerencias"
+    can_create_prs: true
+    can_comment: true
+    can_request_changes: false
+    require_human_approval_for: ["pr_merge", "deploy"]
+    max_files_per_pr: 5
+
+  L2:
+    description: "Cambios en staging"
+    can_create_prs: true
+    can_comment: true
+    can_request_changes: true
+    can_deploy_to: ["staging"]
+    require_human_approval_for: ["production_deploy", "security_changes"]
+    max_files_per_pr: 20
+    require_min_confidence: 0.85
+
+  L3:
+    description: "Con supervisión en producción"
+    can_create_prs: true
+    can_comment: true
+    can_request_changes: true
+    can_deploy_to: ["staging", "production"]
+    require_human_approval_for: ["production_deploy", "security_changes", "infrastructure_changes"]
+    max_files_per_pr: 50
+    require_min_confidence: 0.90
+
+  L4:
+    description: "Infraestructura (doble aprobación)"
+    can_create_prs: true
+    can_comment: true
+    can_request_changes: true
+    can_deploy_to: ["staging", "production"]
+    require_human_approval_for: ["all_critical_actions"]
+    required_approvals: 2
+    max_files_per_pr: 100
+    require_min_confidence: 0.95

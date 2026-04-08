@@ -1,0 +1,704 @@
+# Pipeline Principal de Producción — Source of Truth v1.0.0
+# Diseñado para ser heredado por todos los repositorios del ecosistema.
+# Incluye: validación, testing, seguridad, build, evaluación de agentes y despliegue.
+
+name: "🚀 Main Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+  pull_request:
+    branches:
+      - main
+      - "release/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: false
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+      force_deploy:
+        description: "Force deploy even if agent evaluation fails"
+        required: false
+        default: false
+        type: boolean
+
+# Permisos mínimos por defecto (principio de mínimo privilegio)
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+# Evitar ejecuciones concurrentes en la misma rama
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  SOT_VERSION: "1.0.0"
+  MIN_COVERAGE: "80"
+  NODE_VERSION: "20"
+  PYTHON_VERSION: "3.11"
+
+# ==============================================================
+# JOB 1: VALIDACIÓN
+# Linting, análisis estático y buenas prácticas
+# ==============================================================
+jobs:
+  validate:
+    name: "✅ Validate"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+        if: hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/setup.py') != ''
+
+      - name: "Set up Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+        if: hashFiles('**/package.json') != ''
+
+      - name: "Install Python dependencies"
+        run: pip install ruff mypy black
+        if: hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/setup.py') != ''
+
+      - name: "Python: Lint with ruff"
+        run: ruff check .
+        if: hashFiles('**/*.py') != ''
+
+      - name: "Python: Type check with mypy"
+        run: mypy . --ignore-missing-imports
+        if: hashFiles('**/*.py', '**/mypy.ini', '**/pyproject.toml') != ''
+        continue-on-error: true
+
+      - name: "Node.js: Install dependencies"
+        run: npm ci
+        if: hashFiles('**/package.json') != ''
+
+      - name: "Node.js: Lint with ESLint"
+        run: npm run lint
+        if: hashFiles('**/.eslintrc*', '**/eslint.config*') != ''
+
+      - name: "YAML: Validate syntax"
+        run: |
+          pip install yamllint
+          find . -name "*.yml" -o -name "*.yaml" | \
+            grep -v ".git/" | \
+            grep -v "node_modules/" | \
+            xargs yamllint -d relaxed
+        continue-on-error: true
+
+      - name: "Markdown: Check links"
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: "yes"
+          config-file: ".mlc_config.json"
+        continue-on-error: true
+
+      - name: "Source of Truth: Validate .source-of-truth.yml"
+        run: |
+          if [ -f ".source-of-truth.yml" ]; then
+            python3 -c "
+          import yaml, sys
+          with open('.source-of-truth.yml') as f:
+              config = yaml.safe_load(f)
+          required_keys = ['source_of_truth', 'repository', 'standards']
+          missing = [k for k in required_keys if k not in config]
+          if missing:
+              print(f'ERROR: Missing required keys in .source-of-truth.yml: {missing}')
+              sys.exit(1)
+          print('✅ .source-of-truth.yml is valid')
+            "
+          else
+            echo "⚠️  No .source-of-truth.yml found. Consider adding it to link to the Source of Truth."
+          fi
+
+# ==============================================================
+# JOB 2: TESTING
+# Unit tests, integration tests y E2E
+# ==============================================================
+  test:
+    name: "�� Test"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [validate]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+        if: hashFiles('**/requirements*.txt', '**/pyproject.toml') != ''
+
+      - name: "Set up Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+        if: hashFiles('**/package.json') != ''
+
+      - name: "Install Python dependencies"
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+        if: hashFiles('**/requirements.txt') != ''
+
+      - name: "Install Node.js dependencies"
+        run: npm ci
+        if: hashFiles('**/package.json') != ''
+
+      - name: "Python: Run unit tests with coverage"
+        run: |
+          pytest tests/unit/ \
+            --cov=. \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:coverage_html \
+            --cov-fail-under=${{ env.MIN_COVERAGE }} \
+            --junitxml=test-results/unit.xml \
+            -v
+        if: hashFiles('tests/unit/**') != ''
+        env:
+          DATABASE_URL: "postgresql://postgres:testpassword@localhost:5432/testdb"
+
+      - name: "Python: Run integration tests"
+        run: |
+          pytest tests/integration/ \
+            --junitxml=test-results/integration.xml \
+            -v
+        if: hashFiles('tests/integration/**') != ''
+        env:
+          DATABASE_URL: "postgresql://postgres:testpassword@localhost:5432/testdb"
+
+      - name: "Node.js: Run tests with coverage"
+        run: npm run test:coverage
+        if: hashFiles('**/package.json') != '' && hashFiles('**/*.test.{js,ts}', '**/*.spec.{js,ts}') != ''
+
+      - name: "Upload coverage reports"
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+        if: hashFiles('coverage.xml') != ''
+
+      - name: "Upload test results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test-results/
+            coverage_html/
+          retention-days: 30
+        if: always()
+
+# ==============================================================
+# JOB 3: SEGURIDAD
+# Escaneo de vulnerabilidades, secretos y dependencias
+# ==============================================================
+  security:
+    name: "🔐 Security"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [validate]
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "Secret scanning: gitleaks"
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        continue-on-error: true
+
+      - name: "SAST: CodeQL analysis"
+        uses: github/codeql-action/init@v3
+        with:
+          languages: "javascript,python"
+          queries: "security-and-quality"
+        continue-on-error: true
+
+      - name: "SAST: CodeQL autobuild"
+        uses: github/codeql-action/autobuild@v3
+        continue-on-error: true
+
+      - name: "SAST: CodeQL analyze"
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript,python"
+        continue-on-error: true
+
+      - name: "Dependencies: Python safety check"
+        run: |
+          pip install safety
+          safety check --full-report
+        if: hashFiles('**/requirements*.txt') != ''
+        continue-on-error: true
+
+      - name: "Dependencies: npm audit"
+        run: npm audit --audit-level=high
+        if: hashFiles('**/package.json') != ''
+        continue-on-error: true
+
+      - name: "Permissions: Validate workflow permissions"
+        run: |
+          python3 -c "
+          import yaml, glob, sys
+          issues = []
+          for f in glob.glob('.github/workflows/*.yml'):
+              with open(f) as fh:
+                  wf = yaml.safe_load(fh)
+              if 'permissions' not in wf:
+                  issues.append(f'{f}: Missing top-level permissions block')
+          if issues:
+              for i in issues:
+                  print(f'WARNING: {i}')
+          else:
+              print('✅ All workflows have explicit permissions')
+          "
+        continue-on-error: true
+
+# ==============================================================
+# JOB 4: BUILD
+# Construcción reproducible del sistema
+# ==============================================================
+  build:
+    name: "🏗️ Build"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [test, security]
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+        if: hashFiles('**/pyproject.toml', '**/setup.py') != ''
+
+      - name: "Set up Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+        if: hashFiles('**/package.json') != ''
+
+      - name: "Install dependencies"
+        run: npm ci
+        if: hashFiles('**/package.json') != ''
+
+      - name: "Python: Build package"
+        run: |
+          pip install build
+          python -m build
+        if: hashFiles('**/pyproject.toml') != ''
+
+      - name: "Node.js: Build"
+        run: npm run build
+        if: hashFiles('**/package.json') != '' && hashFiles('src/**') != ''
+
+      - name: "Docker: Build image"
+        run: |
+          docker build \
+            --build-arg VERSION=${{ github.sha }} \
+            --label "source.commit=${{ github.sha }}" \
+            --label "source.ref=${{ github.ref }}" \
+            --label "source.repository=${{ github.repository }}" \
+            -t app:${{ github.sha }} .
+        if: hashFiles('Dockerfile') != ''
+
+      - name: "Upload build artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            build/
+          retention-days: 30
+        if: always()
+
+# ==============================================================
+# JOB 5: EVALUACIÓN DE AGENTES
+# Validación de comportamiento y calidad de agentes (si aplica)
+# ==============================================================
+  agent_evaluate:
+    name: "🤖 Agent Evaluation"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test]
+    if: |
+      hashFiles('agents/**', '**/agent-config.yml') != '' ||
+      contains(github.event.head_commit.message, '[agent]')
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: "Install evaluation dependencies"
+        run: |
+          pip install jsonschema pyyaml
+
+      - name: "Validate agent-config.yml files"
+        run: |
+          python3 - << 'PYEOF'
+          import yaml
+          import glob
+          import sys
+          import os
+
+          required_keys = ["agent", "agent.id", "agent.standard", "agent.autonomy", "agent.iteration"]
+          errors = []
+
+          for config_file in glob.glob("**/agent-config.yml", recursive=True):
+              with open(config_file) as f:
+                  config = yaml.safe_load(f)
+              if not config:
+                  errors.append(f"{config_file}: Empty configuration")
+                  continue
+              if "agent" not in config:
+                  errors.append(f"{config_file}: Missing 'agent' root key")
+                  continue
+              agent = config["agent"]
+              for key in ["id", "standard", "autonomy", "iteration"]:
+                  if key not in agent:
+                      errors.append(f"{config_file}: Missing required key 'agent.{key}'")
+
+          if errors:
+              for e in errors:
+                  print(f"❌ {e}")
+              sys.exit(1)
+          else:
+              print("✅ All agent-config.yml files are valid")
+          PYEOF
+
+      - name: "Validate agent response schema"
+        run: |
+          python3 - << 'PYEOF'
+          import json
+          import glob
+          import sys
+
+          try:
+              import jsonschema
+          except ImportError:
+              print("jsonschema not available, skipping schema validation")
+              sys.exit(0)
+
+          schema_path = "agents/evaluation/validation-schema.json"
+          if not __import__("os").path.exists(schema_path):
+              print("⚠️  Validation schema not found, skipping")
+              sys.exit(0)
+
+          with open(schema_path) as f:
+              schema = json.load(f)
+
+          # Validate test responses if they exist
+          test_responses = glob.glob("tests/agent_responses/*.json", recursive=True)
+          if not test_responses:
+              print("ℹ️  No test agent responses found to validate")
+              sys.exit(0)
+
+          errors = []
+          for response_file in test_responses:
+              with open(response_file) as f:
+                  response = json.load(f)
+              try:
+                  jsonschema.validate(response, schema)
+              except jsonschema.ValidationError as e:
+                  errors.append(f"{response_file}: {e.message}")
+
+          if errors:
+              for e in errors:
+                  print(f"❌ {e}")
+              sys.exit(1)
+          else:
+              print(f"✅ All {len(test_responses)} agent response(s) validated")
+          PYEOF
+
+      - name: "Check agent behavior metrics"
+        run: |
+          python3 - << 'PYEOF'
+          import yaml
+          import glob
+          import sys
+
+          metrics_path = "agents/evaluation/metrics.yml"
+          if not __import__("os").path.exists(metrics_path):
+              print("⚠️  Metrics configuration not found")
+              sys.exit(0)
+
+          with open(metrics_path) as f:
+              metrics = yaml.safe_load(f)
+
+          # Validate metrics structure
+          required_sections = ["behavior_metrics", "quality_metrics", "security_metrics", "aggregate_scores"]
+          for section in required_sections:
+              if section not in metrics:
+                  print(f"❌ Missing required section in metrics.yml: {section}")
+                  sys.exit(1)
+
+          print("✅ Agent evaluation metrics configuration is valid")
+          print(f"   Behavior metrics: {len(metrics['behavior_metrics'])}")
+          print(f"   Quality metrics: {len(metrics['quality_metrics'])}")
+          print(f"   Security metrics: {len(metrics['security_metrics'])}")
+          PYEOF
+
+# ==============================================================
+# JOB 6: DEPLOY A STAGING
+# Despliegue a entorno de staging
+# ==============================================================
+  deploy_staging:
+    name: "🚀 Deploy Staging"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build, agent_evaluate]
+    if: |
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+    permissions:
+      contents: read
+      id-token: write  # Para OIDC auth con cloud providers
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "Download build artifacts"
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+        continue-on-error: true
+
+      - name: "Deploy to staging"
+        run: |
+          echo "🚀 Deploying to staging environment..."
+          echo "   Commit: ${{ github.sha }}"
+          echo "   Branch: ${{ github.ref_name }}"
+          echo "   Actor: ${{ github.actor }}"
+          # Add your deployment script here:
+          # ./scripts/deploy.sh staging ${{ github.sha }}
+
+      - name: "Smoke tests on staging"
+        run: |
+          echo "🧪 Running smoke tests on staging..."
+          # Add smoke tests here:
+          # npm run test:smoke -- --env staging
+        continue-on-error: true
+
+      - name: "Notify deployment"
+        if: always()
+        run: |
+          echo "Deployment status: ${{ job.status }}"
+          # Add notification logic (Slack, Teams, etc.)
+
+# ==============================================================
+# JOB 7: DEPLOY A PRODUCCIÓN
+# Despliegue a entorno de producción (requiere aprobación)
+# ==============================================================
+  deploy_production:
+    name: "🏭 Deploy Production"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [deploy_staging]
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "Download build artifacts"
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+        continue-on-error: true
+
+      - name: "Deploy to production"
+        run: |
+          echo "🏭 Deploying to PRODUCTION environment..."
+          echo "   Commit: ${{ github.sha }}"
+          echo "   Branch: ${{ github.ref_name }}"
+          echo "   Actor: ${{ github.actor }}"
+          echo "   Approved by: ${{ github.event.sender.login }}"
+          # Add your production deployment script here:
+          # ./scripts/deploy.sh production ${{ github.sha }}
+
+      - name: "Production health check"
+        run: |
+          echo "🏥 Running production health checks..."
+          # Add health check logic:
+          # curl --retry 5 --retry-delay 10 ${{ vars.PRODUCTION_URL }}/health
+
+      - name: "Tag release"
+        run: |
+          echo "🏷️  Production deployment successful"
+          # Auto-tag the release if needed
+
+      - name: "Notify deployment"
+        if: always()
+        run: |
+          echo "Production deployment status: ${{ job.status }}"
+
+# ==============================================================
+# JOB 8: GOBERNANZA
+# Auditoría y trazabilidad automática
+# ==============================================================
+  governance:
+    name: "🏛️ Governance"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [validate, test, security, build]
+    if: always()
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "Generate pipeline audit log"
+        run: |
+          python3 - << 'PYEOF'
+          import json
+          import os
+          from datetime import datetime
+
+          audit_log = {
+              "pipeline_run": {
+                  "run_id": os.environ.get("GITHUB_RUN_ID", "unknown"),
+                  "run_number": os.environ.get("GITHUB_RUN_NUMBER", "unknown"),
+                  "workflow": os.environ.get("GITHUB_WORKFLOW", "unknown"),
+                  "repository": os.environ.get("GITHUB_REPOSITORY", "unknown"),
+                  "actor": os.environ.get("GITHUB_ACTOR", "unknown"),
+                  "sha": os.environ.get("GITHUB_SHA", "unknown"),
+                  "ref": os.environ.get("GITHUB_REF", "unknown"),
+                  "event": os.environ.get("GITHUB_EVENT_NAME", "unknown"),
+                  "timestamp": datetime.utcnow().isoformat() + "Z",
+                  "source_of_truth_version": "1.0.0"
+              }
+          }
+
+          os.makedirs("audit-logs", exist_ok=True)
+          with open(f"audit-logs/pipeline-{os.environ.get('GITHUB_RUN_ID', 'unknown')}.json", "w") as f:
+              json.dump(audit_log, f, indent=2)
+
+          print(json.dumps(audit_log, indent=2))
+          PYEOF
+
+      - name: "Check Source of Truth compliance"
+        run: |
+          python3 - << 'PYEOF'
+          import os
+          import yaml
+          import sys
+
+          compliance_issues = []
+          compliance_passes = []
+
+          # Check 1: .source-of-truth.yml exists
+          if os.path.exists(".source-of-truth.yml"):
+              compliance_passes.append("✅ .source-of-truth.yml found")
+              with open(".source-of-truth.yml") as f:
+                  config = yaml.safe_load(f)
+              sot_config = config.get("source_of_truth", {})
+              version = sot_config.get("version", "unknown")
+              print(f"   Source of Truth version: {version}")
+          else:
+              compliance_issues.append("⚠️  No .source-of-truth.yml found")
+
+          # Check 2: README.md exists
+          if os.path.exists("README.md"):
+              compliance_passes.append("✅ README.md found")
+          else:
+              compliance_issues.append("❌ README.md not found")
+
+          # Check 3: CHANGELOG.md exists
+          if os.path.exists("CHANGELOG.md"):
+              compliance_passes.append("✅ CHANGELOG.md found")
+          else:
+              compliance_issues.append("⚠️  CHANGELOG.md not found")
+
+          print("\n📊 Source of Truth Compliance Report:")
+          for item in compliance_passes:
+              print(f"  {item}")
+          for item in compliance_issues:
+              print(f"  {item}")
+
+          critical_failures = [i for i in compliance_issues if i.startswith("❌")]
+          if critical_failures:
+              print(f"\n❌ {len(critical_failures)} critical compliance issue(s) found")
+              sys.exit(1)
+          else:
+              print(f"\n✅ Compliance check passed ({len(compliance_issues)} warnings)")
+          PYEOF
+
+      - name: "Upload audit log"
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-logs
+          path: audit-logs/
+          retention-days: 90
+        if: always()

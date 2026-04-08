@@ -1,0 +1,126 @@
+# Configuración del Pipeline Base
+# Source of Truth v1.0.0
+
+version: "1.0.0"
+last_updated: "2026-04-08"
+
+# ============================================================
+# TIMEOUTS
+# ============================================================
+timeouts:
+  validate: 10        # minutos
+  test_unit: 15
+  test_integration: 20
+  test_e2e: 30
+  security: 15
+  build: 30
+  agent_evaluate: 20
+  deploy_staging: 15
+  deploy_production: 20
+
+# ============================================================
+# THRESHOLDS
+# ============================================================
+thresholds:
+  code_coverage_minimum: 80
+  code_coverage_optimal: 95
+  security_vulnerabilities_critical: 0    # Bloquear si hay CVEs críticos
+  security_vulnerabilities_high: 0        # Bloquear si hay CVEs altos
+  agent_behavior_score_minimum: 0.90
+  agent_confidence_minimum: 0.85
+  build_size_limit_mb: 500
+
+# ============================================================
+# ENTORNOS
+# ============================================================
+environments:
+  staging:
+    auto_deploy: true
+    requires:
+      - "validate"
+      - "test"
+      - "security"
+      - "build"
+    branches:
+      - "main"
+      - "staging"
+      - "release/**"
+
+  production:
+    auto_deploy: false
+    requires_approval: true
+    minimum_approvals: 2
+    requires:
+      - "validate"
+      - "test"
+      - "security"
+      - "build"
+      - "deploy_staging"
+    branches:
+      - "main"
+
+# ============================================================
+# HERRAMIENTAS DEL PIPELINE
+# ============================================================
+tools:
+  validate:
+    linting:
+      python: "ruff"
+      javascript: "eslint"
+      yaml: "yamllint"
+      markdown: "markdownlint"
+    static_analysis:
+      python: "mypy"
+      javascript: "tsc"
+    
+  security:
+    secrets:
+      tool: "gitleaks"
+      config: ".gitleaks.toml"
+    dependencies:
+      tool: "dependabot"
+    sast:
+      tool: "codeql"
+      languages: ["javascript", "python", "go", "java"]
+    containers:
+      tool: "trivy"
+      severity: ["CRITICAL", "HIGH"]
+
+  test:
+    coverage_tool: "coverage.py"  # Python; jest/istanbul para JS
+    report_format: ["junit", "html", "coverage-xml"]
+    
+  build:
+    reproducible: true
+    cache: true
+    artifact_retention_days: 30
+
+# ============================================================
+# NOTIFICACIONES
+# ============================================================
+notifications:
+  on_failure:
+    channels:
+      - "github_checks"
+      - "pr_comment"
+  on_success:
+    channels:
+      - "github_checks"
+  on_security_alert:
+    channels:
+      - "github_checks"
+      - "security_advisory"
+  on_deploy_production:
+    channels:
+      - "github_checks"
+
+# ============================================================
+# CACHÉ
+# ============================================================
+cache:
+  dependencies:
+    enabled: true
+    key_prefix: "deps-v1"
+  build:
+    enabled: true
+    key_prefix: "build-v1"
