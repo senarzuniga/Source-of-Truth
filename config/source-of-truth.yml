@@ -1,0 +1,140 @@
+# Source of Truth — Configuración Central
+# Version: 1.0.0
+
+version: "1.0.0"
+schema_version: "1.0"
+last_updated: "2026-04-08"
+repository: "https://github.com/senarzuniga/Source-of-Truth"
+
+# ============================================================
+# IDENTIDAD
+# ============================================================
+identity:
+  name: "Source of Truth"
+  description: "Fuente única de verdad para agentes, pipelines y estándares"
+  maintainer: "senarzuniga"
+  contact: "governance@source-of-truth"
+
+# ============================================================
+# ESTÁNDARES ACTIVOS
+# ============================================================
+standards:
+  agent_behavior:
+    version: "1.0.0"
+    path: "agents/behavior-standard.md"
+    mandatory: true
+    
+  code_quality:
+    version: "1.0.0"
+    path: "standards/code-quality.md"
+    mandatory: true
+    
+  testing:
+    version: "1.0.0"
+    path: "standards/testing-standards.md"
+    mandatory: true
+    
+  documentation:
+    version: "1.0.0"
+    path: "standards/documentation-standards.md"
+    mandatory: true
+    
+  security:
+    version: "1.0.0"
+    path: "governance/security-policy.md"
+    mandatory: true
+
+# ============================================================
+# PIPELINE BASE
+# ============================================================
+pipeline:
+  version: "1.0.0"
+  path: ".github/workflows/main-pipeline.yml"
+  required_stages:
+    - validate
+    - test
+    - security
+    - build
+    - agent_evaluate
+  optional_stages:
+    - deploy_staging
+    - deploy_production
+    - governance
+
+# ============================================================
+# AGENTE AUDITOR
+# ============================================================
+auditor_agent:
+  enabled: true
+  schedule: "0 2 * * 1"        # Lunes a las 2 AM UTC
+  severity_threshold: "medium"  # Crear PR para severidad >= medium
+  confidence_threshold: 0.85    # Confianza mínima para PR automático
+  max_prs_per_run: 5
+  notify_on:
+    - "critical"
+    - "high"
+  assignees: []
+
+# ============================================================
+# MÉTRICAS GLOBALES
+# ============================================================
+global_metrics:
+  test_coverage_minimum: 80
+  security_score_minimum: "A"
+  maintainability_minimum: "B"
+  agent_behavior_score_minimum: 0.90
+  compliance_score_minimum: 0.90
+
+# ============================================================
+# POLÍTICAS DE GOBERNANZA
+# ============================================================
+governance:
+  compliance_check_frequency: "on_push"
+  audit_frequency: "weekly"
+  standard_migration_deadline_days: 30
+  exception_max_duration_days: 30
+  
+  escalation:
+    critical:
+      response_sla_hours: 1
+      halt_agent: true
+      notify_architect: true
+    high:
+      response_sla_hours: 4
+      notify_architect: true
+    medium:
+      response_sla_days: 1
+    low:
+      response_sla_days: 7
+
+# ============================================================
+# SEGURIDAD
+# ============================================================
+security:
+  branch_protection:
+    main:
+      required_approvals: 1
+      dismiss_stale_reviews: true
+      require_status_checks: true
+      required_status_checks:
+        - "ci/validate"
+        - "ci/test"
+        - "ci/security"
+      allow_force_push: false
+      allow_deletion: false
+      
+  secret_scanning: true
+  dependabot:
+    enabled: true
+    frequency: "weekly"
+    ecosystems:
+      - "npm"
+      - "pip"
+      - "github-actions"
+
+# ============================================================
+# REGISTRO DE REPOSITORIOS VINCULADOS
+# ============================================================
+# Los repositorios se registran automáticamente al incluir
+# el archivo .source-of-truth.yml con referencia a este repositorio
+linked_repositories: []  # Gestionado automáticamente por el Agente Auditor

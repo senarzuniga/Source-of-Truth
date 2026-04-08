@@ -1,0 +1,112 @@
+# .source-of-truth.yml
+# Archivo de configuración para repositorios vinculados al Source of Truth
+# Copia este archivo a la raíz de tu repositorio como: .source-of-truth.yml
+#
+# Source of Truth: https://github.com/senarzuniga/Source-of-Truth
+# Versión del estándar: 1.0.0
+
+source_of_truth:
+  repository: "https://github.com/senarzuniga/Source-of-Truth"
+  version: "1.0.0"           # Versión del estándar que se adopta
+  registered_at: "YYYY-MM-DD" # Fecha de registro (actualizar al configurar)
+
+# ============================================================
+# IDENTIDAD DEL REPOSITORIO
+# ============================================================
+repository:
+  name: "nombre-del-repositorio"          # Nombre descriptivo
+  description: "Descripción del proyecto" # Qué hace este repositorio
+  team: "nombre-del-equipo"               # Equipo responsable
+  owner: "github-username"                # Propietario principal
+  type: "service|library|tool|agent"      # Tipo de proyecto
+  language: "python|javascript|go|java"   # Lenguaje principal
+  tags:
+    - "tag1"
+    - "tag2"
+
+# ============================================================
+# CONFORMIDAD CON ESTÁNDARES
+# ============================================================
+standards:
+  code_quality:
+    enabled: true
+    linter: "ruff"      # ruff|eslint|golangci-lint|checkstyle
+    formatter: "black"  # black|prettier|gofmt
+    min_coverage: 80    # Porcentaje mínimo de cobertura
+    
+  testing:
+    enabled: true
+    unit_tests: true
+    integration_tests: true
+    e2e_tests: false    # Cambiar a true si aplica
+    
+  documentation:
+    enabled: true
+    required_files:
+      - "README.md"
+      - "CHANGELOG.md"
+    
+  security:
+    enabled: true
+    secret_scanning: true
+    dependency_scanning: true
+    sast: true
+
+# ============================================================
+# CONFIGURACIÓN DE PIPELINE
+# ============================================================
+pipeline:
+  inherits_from: "source-of-truth"  # Heredar pipeline base
+  stages:
+    validate: true
+    test: true
+    security: true
+    build: true
+    agent_evaluate: false  # Cambiar a true si el repo contiene agentes
+    deploy_staging: false  # Cambiar a true si aplica
+    deploy_production: false  # Cambiar a true si aplica
+    
+  environments:
+    staging:
+      enabled: false
+      url: ""    # URL del entorno de staging
+      
+    production:
+      enabled: false
+      url: ""    # URL del entorno de producción
+      requires_approval: true
+
+# ============================================================
+# CONFIGURACIÓN DE AGENTES (si aplica)
+# ============================================================
+agents:
+  enabled: false           # Cambiar a true si el repo contiene agentes
+  agents_list: []          # Lista de IDs de agentes en este repo
+
+# ============================================================
+# CONFIGURACIÓN DEL AGENTE AUDITOR
+# ============================================================
+auditor:
+  enabled: true
+  schedule: "0 2 * * 1"   # Cuándo ejecutar la auditoría (cron)
+  notify_on:
+    - "critical"
+    - "high"
+  exclude_paths:           # Rutas a excluir de la auditoría
+    - "vendor/"
+    - "node_modules/"
+    - "dist/"
+
+# ============================================================
+# EXCEPCIONES AL ESTÁNDAR (si aplica)
+# ============================================================
+# Solo completar si tienes una excepción aprobada por el Arquitecto
+exceptions: []
+# Ejemplo:
+# exceptions:
+#   - standard: "testing.min_coverage"
+#     reason: "Repositorio legacy en proceso de migración"
+#     approved_by: "architect-username"
+#     approved_at: "2026-04-08"
+#     expires_at: "2026-05-08"
+#     issue: "https://github.com/org/repo/issues/123"

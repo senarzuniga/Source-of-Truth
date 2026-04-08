@@ -1,0 +1,354 @@
+# Pipeline de Evaluación Continua de Agentes
+# Source of Truth v1.0.0
+# Ejecuta evaluaciones periódicas del comportamiento de los agentes
+
+name: "🤖 Agent Evaluator"
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # Diariamente a las 6 AM UTC
+  workflow_dispatch:
+    inputs:
+      agent_id:
+        description: "Agent ID to evaluate (leave empty for all)"
+        required: false
+        type: string
+      evaluation_type:
+        description: "Type of evaluation"
+        required: false
+        default: "full"
+        type: choice
+        options:
+          - full
+          - behavior_only
+          - quality_only
+          - security_only
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+env:
+  SOT_VERSION: "1.0.0"
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ============================================================
+  # JOB 1: EVALUAR COMPORTAMIENTO DE AGENTES
+  # ============================================================
+  evaluate_behavior:
+    name: "🧠 Evaluate Agent Behavior"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: |
+      github.event.inputs.evaluation_type == 'full' ||
+      github.event.inputs.evaluation_type == 'behavior_only' ||
+      github.event.inputs.evaluation_type == ''
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: "Install dependencies"
+        run: pip install pyyaml jsonschema
+
+      - name: "Load evaluation metrics"
+        id: load_metrics
+        run: |
+          python3 - << 'PYEOF'
+          import yaml
+
+          with open("agents/evaluation/metrics.yml") as f:
+              metrics = yaml.safe_load(f)
+
+          # Extract key thresholds
+          behavior = metrics.get("behavior_metrics", {})
+          quality = metrics.get("quality_metrics", {})
+          aggregate = metrics.get("aggregate_scores", {})
+
+          print(f"Behavior score minimum: {aggregate.get('behavior_score', {}).get('minimum', 0.90)}")
+          print(f"Quality score minimum: {aggregate.get('quality_score', {}).get('minimum', 0.80)}")
+          print(f"Overall score minimum: {aggregate.get('overall_score', {}).get('minimum', 0.85)}")
+          PYEOF
+
+      - name: "Evaluate agent configurations"
+        id: evaluate_agents
+        run: |
+          python3 - << 'PYEOF'
+          import yaml
+          import glob
+          import json
+          import os
+          from datetime import datetime
+
+          results = []
+          agent_configs = glob.glob("**/agent-config.yml", recursive=True)
+
+          if not agent_configs:
+              print("ℹ️  No agent-config.yml files found to evaluate")
+          else:
+              for config_file in agent_configs:
+                  with open(config_file) as f:
+                      config = yaml.safe_load(f)
+
+                  agent = config.get("agent", {})
+                  agent_id = agent.get("id", "unknown")
+
+                  # Filter by agent_id if specified
+                  filter_id = os.environ.get("INPUT_AGENT_ID", "")
+                  if filter_id and agent_id != filter_id:
+                      continue
+
+                  result = {
+                      "agent_id": agent_id,
+                      "config_file": config_file,
+                      "timestamp": datetime.utcnow().isoformat() + "Z",
+                      "checks": []
+                  }
+
+                  # Check: standard version
+                  standard = agent.get("standard", {})
+                  sot_version = standard.get("source_of_truth_version", "")
+                  if sot_version:
+                      result["checks"].append({
+                          "name": "standard_version_declared",
+                          "passed": True,
+                          "value": sot_version
+                      })
+                  else:
+                      result["checks"].append({
+                          "name": "standard_version_declared",
+                          "passed": False,
+                          "error": "No source_of_truth_version declared"
+                      })
+
+                  # Check: autonomy level
+                  autonomy = agent.get("autonomy", {})
+                  level = autonomy.get("level", "")
+                  valid_levels = ["L0", "L1", "L2", "L3", "L4"]
+                  result["checks"].append({
+                      "name": "valid_autonomy_level",
+                      "passed": level in valid_levels,
+                      "value": level
+                  })
+
+                  # Check: iteration config
+                  iteration = agent.get("iteration", {})
+                  min_hyp = iteration.get("min_hypotheses", 0)
+                  result["checks"].append({
+                      "name": "min_hypotheses_configured",
+                      "passed": min_hyp >= 3,
+                      "value": min_hyp
+                  })
+
+                  # Check: logging enabled
+                  logging = agent.get("logging", {})
+                  result["checks"].append({
+                      "name": "logging_enabled",
+                      "passed": logging.get("enabled", False) is True,
+                  })
+
+                  passed = sum(1 for c in result["checks"] if c["passed"])
+                  total = len(result["checks"])
+                  result["score"] = passed / total if total > 0 else 0
+                  result["passed"] = result["score"] >= 0.90
+                  results.append(result)
+
+          # Output results
+          os.makedirs("evaluation-results", exist_ok=True)
+          with open("evaluation-results/agent-evaluation.json", "w") as f:
+              json.dump({"results": results, "timestamp": datetime.utcnow().isoformat() + "Z"}, f, indent=2)
+
+          # Print summary
+          if results:
+              print(f"\n📊 Agent Evaluation Results ({len(results)} agent(s)):")
+              all_passed = True
+              for r in results:
+                  status = "✅" if r["passed"] else "❌"
+                  print(f"  {status} {r['agent_id']}: score={r['score']:.2f}")
+                  for c in r["checks"]:
+                      check_status = "  ✅" if c["passed"] else "  ❌"
+                      print(f"    {check_status} {c['name']}: {c.get('value', c.get('error', ''))}")
+                  if not r["passed"]:
+                      all_passed = False
+
+              if all_passed:
+                  print("\n✅ All agents passed evaluation")
+              else:
+                  print("\n⚠️  Some agents failed evaluation — check results")
+          PYEOF
+        env:
+          INPUT_AGENT_ID: ${{ github.event.inputs.agent_id }}
+
+      - name: "Upload evaluation results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-evaluation-results
+          path: evaluation-results/
+          retention-days: 90
+        if: always()
+
+  # ============================================================
+  # JOB 2: EVALUACIÓN DE CALIDAD
+  # ============================================================
+  evaluate_quality:
+    name: "📊 Evaluate Quality Metrics"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: |
+      github.event.inputs.evaluation_type == 'full' ||
+      github.event.inputs.evaluation_type == 'quality_only' ||
+      github.event.inputs.evaluation_type == ''
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: "Install analysis tools"
+        run: pip install pyyaml
+
+      - name: "Evaluate standards compliance"
+        run: |
+          python3 - << 'PYEOF'
+          import os
+          import yaml
+          import json
+          from datetime import datetime
+
+          results = {
+              "timestamp": datetime.utcnow().isoformat() + "Z",
+              "checks": []
+          }
+
+          # Check Source of Truth config
+          if os.path.exists(".source-of-truth.yml"):
+              with open(".source-of-truth.yml") as f:
+                  sot_config = yaml.safe_load(f)
+              version = sot_config.get("source_of_truth", {}).get("version", "unknown")
+              results["checks"].append({
+                  "name": "source_of_truth_configured",
+                  "passed": True,
+                  "value": version
+              })
+          else:
+              results["checks"].append({
+                  "name": "source_of_truth_configured",
+                  "passed": False,
+                  "severity": "warning"
+              })
+
+          # Check standards files exist
+          standard_files = [
+              "agents/behavior-standard.md",
+              "agents/evaluation/metrics.yml",
+              "agents/evaluation/validation-schema.json",
+              "governance/policies.md",
+              "governance/security-policy.md",
+              "standards/code-quality.md",
+              "standards/testing-standards.md",
+          ]
+          for sf in standard_files:
+              results["checks"].append({
+                  "name": f"standard_file_{sf.replace('/', '_').replace('.', '_')}",
+                  "passed": os.path.exists(sf),
+                  "path": sf
+              })
+
+          # Calculate score
+          passed = sum(1 for c in results["checks"] if c["passed"])
+          total = len(results["checks"])
+          results["score"] = passed / total if total > 0 else 0
+
+          os.makedirs("evaluation-results", exist_ok=True)
+          with open("evaluation-results/quality-evaluation.json", "w") as f:
+              json.dump(results, f, indent=2)
+
+          print(f"\n📊 Quality Evaluation: {passed}/{total} checks passed (score: {results['score']:.2f})")
+          for c in results["checks"]:
+              status = "✅" if c["passed"] else "⚠️"
+              print(f"  {status} {c['name']}")
+          PYEOF
+
+      - name: "Upload quality results"
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-evaluation-results
+          path: evaluation-results/
+          retention-days: 90
+        if: always()
+
+  # ============================================================
+  # JOB 3: REPORTE CONSOLIDADO
+  # ============================================================
+  generate_report:
+    name: "📋 Generate Evaluation Report"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [evaluate_behavior, evaluate_quality]
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "Download all evaluation results"
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-evaluation-results"
+          merge-multiple: true
+          path: evaluation-results/
+        continue-on-error: true
+
+      - name: "Generate consolidated report"
+        id: report
+        run: |
+          python3 - << 'PYEOF'
+          import json
+          import glob
+          import os
+          from datetime import datetime
+
+          all_results = {}
+          for result_file in glob.glob("evaluation-results/*.json"):
+              with open(result_file) as f:
+                  data = json.load(f)
+              name = os.path.basename(result_file).replace(".json", "")
+              all_results[name] = data
+
+          report = {
+              "timestamp": datetime.utcnow().isoformat() + "Z",
+              "source_of_truth_version": "1.0.0",
+              "evaluations": all_results,
+              "overall_status": "pass" if all_results else "no_data"
+          }
+
+          with open("evaluation-results/consolidated-report.json", "w") as f:
+              json.dump(report, f, indent=2)
+
+          print("📋 Consolidated Evaluation Report")
+          print(f"   Timestamp: {report['timestamp']}")
+          print(f"   Evaluations: {list(all_results.keys())}")
+          print(f"   Status: {report['overall_status']}")
+          PYEOF
+
+      - name: "Upload consolidated report"
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidated-evaluation-report
+          path: evaluation-results/consolidated-report.json
+          retention-days: 365
+        if: always()

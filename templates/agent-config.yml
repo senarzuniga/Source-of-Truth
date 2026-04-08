@@ -1,0 +1,124 @@
+# agent-config.yml
+# Archivo de configuración para agentes de IA
+# Coloca este archivo en la raíz de tu agente o en agents/<agent-id>/config.yml
+#
+# Source of Truth: https://github.com/senarzuniga/Source-of-Truth
+# Versión del estándar: 1.0.0
+
+agent:
+  # ========================================================
+  # IDENTIDAD
+  # ========================================================
+  id: "unique-agent-id"              # Identificador único del agente
+  name: "Nombre del Agente"          # Nombre descriptivo
+  version: "1.0.0"                   # Versión del agente
+  description: "Qué hace este agente y en qué dominio opera"
+  type: "task|auditor|evaluator|assistant|specialized"
+  domain: "backend|frontend|devops|security|data|general"
+  
+  # ========================================================
+  # COMPATIBILIDAD CON EL ESTÁNDAR
+  # ========================================================
+  standard:
+    source_of_truth_version: "1.0.0"  # Versión del SoT con que es compatible
+    behavior_standard: "1.0.0"         # Versión del estándar de comportamiento
+    last_validated: "YYYY-MM-DD"        # Última validación exitosa
+    validation_run_id: ""               # ID de la ejecución de validación
+  
+  # ========================================================
+  # NIVEL DE AUTONOMÍA
+  # ========================================================
+  autonomy:
+    level: "L1"    # L0|L1|L2|L3|L4 (ver behavior-standard.md)
+    
+    # Capacidades permitidas según el nivel
+    capabilities:
+      read_files: true
+      search_code: true
+      create_prs: true          # L1+
+      comment_on_prs: true      # L1+
+      request_changes: false    # L2+
+      deploy_staging: false     # L2+
+      deploy_production: false  # L3+ (con aprobación)
+      manage_infrastructure: false  # L4 (doble aprobación)
+      
+    # Restricciones específicas de este agente
+    restrictions:
+      allowed_repositories: []  # Vacío = todos los repos autorizados
+      allowed_paths: []          # Vacío = sin restricciones de ruta
+      blocked_paths:
+        - ".env*"
+        - "**/*secret*"
+        - "**/*credential*"
+      max_files_per_pr: 20
+      max_prs_per_day: 10
+  
+  # ========================================================
+  # CONFIGURACIÓN DE ITERACIÓN
+  # ========================================================
+  iteration:
+    min_hypotheses: 3       # Mínimo de hipótesis a generar
+    max_iterations: 5       # Máximo de iteraciones antes de convergencia
+    convergence_threshold: 0.01  # Mejora mínima para continuar iterando
+    self_evaluation: true   # Siempre autoevaluar antes de entregar
+  
+  # ========================================================
+  # THRESHOLDS DE CALIDAD
+  # ========================================================
+  quality_thresholds:
+    min_confidence: 0.85          # Confianza mínima para actuar
+    min_behavior_score: 0.90      # Score mínimo de comportamiento
+    min_response_accuracy: 0.85   # Precisión mínima de respuestas
+    escalate_if_below: 0.75       # Escalar si el score cae por debajo
+  
+  # ========================================================
+  # CONFIGURACIÓN DE HERRAMIENTAS
+  # ========================================================
+  tools:
+    enabled:
+      - "read_file"
+      - "search_code"
+      - "list_issues"
+      - "create_pr"
+      - "create_issue"
+      - "get_commit"
+    disabled:
+      - "delete_repo"
+      - "manage_secrets"
+      - "modify_branch_protection"
+  
+  # ========================================================
+  # LOGGING Y TRAZABILIDAD
+  # ========================================================
+  logging:
+    enabled: true
+    level: "info"         # debug|info|warn|error
+    include_hypotheses: true
+    include_validation: true
+    include_iterations: true
+    retention_days: 90
+  
+  # ========================================================
+  # NOTIFICACIONES
+  # ========================================================
+  notifications:
+    on_failure: true
+    on_low_confidence: true      # Si confianza < min_confidence
+    on_human_approval_needed: true
+    on_permission_violation: true
+    channels:
+      - "github_issues"
+      # - "slack"
+      # - "email"
+  
+  # ========================================================
+  # MODELO DE LENGUAJE (si aplica)
+  # ========================================================
+  llm:
+    provider: ""           # openai|anthropic|google|azure|local
+    model: ""              # gpt-4|claude-3|gemini-pro|etc
+    temperature: 0.2       # Bajo para mayor consistencia
+    max_tokens: 4096
+    timeout_seconds: 60
+    retry_on_failure: true
+    max_retries: 3
