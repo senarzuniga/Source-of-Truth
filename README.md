@@ -26,6 +26,13 @@ npm start
 
 For detailed usage instructions, refer to the [User Guide](docs/user-guide.md).
 
+## Testing
+To run tests using Jest, execute the following command:
+
+```bash
+npm test
+```
+
 ## Contribution
 We welcome contributions! Please follow these steps:
 
