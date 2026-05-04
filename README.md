@@ -26,6 +26,49 @@ npm start
 
 For detailed usage instructions, refer to the [User Guide](docs/user-guide.md).
 
+## Detailed Usage
+Below are detailed examples of how to use the core features of Source-of-Truth.
+
+### Example 1: Running the Main Command
+To execute the main command and see the default output:
+
+```bash
+npm start
+```
+
+Expected output:
+```
+Starting Source-of-Truth...
+Initialization complete.
+Ready to process commands.
+```
+
+### Example 2: Using a Specific Feature
+To use the 'validate' feature, which checks the compliance of a given file:
+
+```bash
+npm run validate --file=example.txt
+```
+
+Expected output:
+```
+Validating example.txt...
+Compliance check passed.
+```
+
+### Example 3: Generating a Report
+To generate a compliance report:
+
+```bash
+npm run report --output=report.pdf
+```
+
+Expected output:
+```
+Generating report...
+Report saved as report.pdf.
+```
+
 ## Testing
 To run tests using Jest, execute the following command:
 
